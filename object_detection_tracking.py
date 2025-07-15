@@ -10,8 +10,19 @@ from helper import create_video_writer
 conf_threshold = 0.5 #confidence score above this is taken into consideration
 
 # Initialize the video capture and the video writer objects
-video_cap = cv2.VideoCapture("1.mp4")
-writer = create_video_writer(video_cap, "output.mp4")
+input_video = "1.mp4"  # You can change this to "2.mp4" if you want
+output_video = f"output_{input_video}"  # Creates output_1.mp4 or output_2.mp4
+
+video_cap = cv2.VideoCapture(input_video)
+writer = create_video_writer(video_cap, output_video)
+
+# Check if video opened successfully
+if not video_cap.isOpened():
+    print(f"Error: Could not open video file {input_video}")
+    exit()
+
+print(f"Processing {input_video} -> {output_video}")
+
 # Initialize the YOLOv8 model using the default weights
 model = YOLO("yolov8s.pt")
 
@@ -20,14 +31,18 @@ tracker = DeepSort(max_age=50)
 
 ##---- Read frames until end of video file ----##
 # loop over the frames
+frame_count = 0
 while True:
     # starter time to computer the fps
     start = datetime.datetime.now()
     ret, frame = video_cap.read()
     # if there is no frame, we have reached the end of the video
     if not ret:
-        print("End of the video file...")
+        print(f"End of the video file... Processed {frame_count} frames")
         break
+    
+    frame_count += 1
+    
     ############################################################
     ### Detect the objects in the frame using the YOLO model ###
     ############################################################
@@ -89,14 +104,21 @@ while True:
     fps = f"FPS: {1 / (end - start).total_seconds():.2f}"
     cv2.putText(frame, fps, (50, 50),
                 cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 8)
+    
+    # Add frame counter
+    cv2.putText(frame, f"Frame: {frame_count}", (50, 120),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 3)
+    
     # show the output frame
     cv2.imshow("Output", frame)
     # write the frame to disk
     writer.write(frame)
     if cv2.waitKey(1) == ord("q"):
+        print("User interrupted the processing")
         break
 
 # release the video capture, video writer, and close all windows
 video_cap.release()
 writer.release()
 cv2.destroyAllWindows()
+print(f"Video saved as: {output_video}")
