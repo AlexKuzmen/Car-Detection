@@ -1,6 +1,9 @@
 # Car-Detection
 Adding on to car detection: https://thepythoncode.com/article/real-time-vehicle-tracking-and-counting-with-yolov8-opencv
 
+Run pip install -r requirements.txt
+python object_detection.tracking.py
+
 $ tree --filelimit 8
 .
 ├── 1.mp4
