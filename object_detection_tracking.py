@@ -47,7 +47,7 @@ while True:
     ### Detect the objects in the frame using the YOLO model ###
     ############################################################
     # run the YOLO model on the frame
-    results = model(frame)
+    results = model(frame, classes=[2]) # Detect only 'car' class (class id 2)
 
     # initialize the list of bounding boxes and confidences
     detections_list = []
@@ -65,7 +65,7 @@ while True:
             class_id = int(class_id)
             # filter out weak predictions by ensuring the confidence is
             # greater than the minimum confidence
-            if confidence > conf_threshold:
+            if confidence > conf_threshold and class_id == 2:  # Only consider 'car' class
                 # add the bounding box (x, y, w, h), confidence and class id to the results list
                 detections_list.append([[x, y, w, h], confidence, class_id])
 
