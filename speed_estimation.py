@@ -36,30 +36,54 @@ class LaneDetector:
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Apply Gaussian blur
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        # Apply Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(gray, (9, 9), 0)
         
-        # Edge detection
-        edges = cv2.Canny(blurred, 50, 150)
+        # Focus on road area (bottom half of image typically contains road)
+        h, w = gray.shape
+        roi_mask = np.zeros_like(gray)
+        roi_mask[h//2:, :] = 255  # Only look at bottom half
         
-        # Line detection using Hough Transform
-        lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=50, 
-                               minLineLength=50, maxLineGap=10)
+        # Apply ROI mask
+        masked = cv2.bitwise_and(blurred, roi_mask)
+        
+        # More conservative edge detection for cleaner lane detection
+        edges = cv2.Canny(masked, 80, 200, apertureSize=3)
+        
+        # Morphological operations to clean up edges
+        kernel = np.ones((3,3), np.uint8)
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+        
+        # Line detection with stricter parameters
+        lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=80, 
+                               minLineLength=100, maxLineGap=20)
         
         if lines is None:
             return []
         
-        # Filter horizontal lines (lane markings)
-        horizontal_lines = []
+        # Filter for lane markings (horizontal lines in road area)
+        lane_lines = []
         for line in lines:
             x1, y1, x2, y2 = line[0]
+            
+            # Skip lines not in road area
+            if y1 < h//2 and y2 < h//2:
+                continue
+                
+            # Calculate line properties
+            length = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
             angle = abs(math.atan2(y2 - y1, x2 - x1) * 180 / np.pi)
             
-            # Filter for near-horizontal lines (within 20 degrees)
-            if angle < 20 or angle > 160:
-                horizontal_lines.append((x1, y1, x2, y2))
+            # Filter for horizontal lines with reasonable length
+            if (angle < 15 or angle > 165) and length > 80:
+                # Check if line looks like lane marking (white/yellow)
+                mid_x, mid_y = (x1 + x2) // 2, (y1 + y2) // 2
+                if 0 <= mid_x < w and 0 <= mid_y < h:
+                    pixel_intensity = gray[mid_y, mid_x]
+                    if pixel_intensity > 150:  # Bright lines (lane markings)
+                        lane_lines.append((x1, y1, x2, y2))
         
-        return horizontal_lines
+        return lane_lines
     
     def estimate_scale_from_lanes(self, frame: np.ndarray, 
                                  lane_lines: List[Tuple[int, int, int, int]]) -> float:
@@ -67,41 +91,56 @@ class LaneDetector:
         Estimate pixels per meter using lane dash markings
         Returns scale factor (pixels/meter)
         """
-        if not lane_lines:
-            return 1.0  # Default scale if no lanes detected
+        # Fallback scale based on typical road dimensions and camera height
+        h, w = frame.shape[:2]
+        # Assume camera is ~3m high, road width visible is ~20m
+        # This gives roughly 30-50 pixels per meter for typical dashcam footage
+        fallback_scale = w / 20.0  # Rough estimate: image width = ~20 meters of road
+        
+        if not lane_lines or len(lane_lines) < 2:
+            return fallback_scale
         
         # Find the most common y-coordinate (road level)
         y_coords = []
-        for x1, y1, x2, y2 in lane_lines:
-            y_coords.extend([y1, y2])
+        valid_lines = []
         
-        if not y_coords:
-            return 1.0
+        for x1, y1, x2, y2 in lane_lines:
+            # Only consider lines in the lower part of the image (actual road)
+            if y1 > h * 0.6 and y2 > h * 0.6:  # Bottom 40% of image
+                y_coords.extend([y1, y2])
+                valid_lines.append((x1, y1, x2, y2))
+        
+        if not valid_lines:
+            return fallback_scale
         
         # Use median y-coordinate as road level
         road_y = int(np.median(y_coords))
         
         # Find lane dashes near road level
         road_level_lines = []
-        for x1, y1, x2, y2 in lane_lines:
-            if abs(y1 - road_y) < 20 and abs(y2 - road_y) < 20:
-                road_level_lines.append((x1, y1, x2, y2))
+        for x1, y1, x2, y2 in valid_lines:
+            avg_y = (y1 + y2) / 2
+            if abs(avg_y - road_y) < 30:  # More tolerant range
+                length = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+                # Only consider reasonable dash lengths (not tiny segments or huge lines)
+                if 50 < length < 200:  # Reasonable dash length in pixels
+                    road_level_lines.append((x1, y1, x2, y2, length))
         
         if len(road_level_lines) < 2:
-            return 1.0
+            return fallback_scale
         
         # Calculate average dash length in pixels
-        dash_lengths = []
-        for x1, y1, x2, y2 in road_level_lines:
-            length = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-            dash_lengths.append(length)
-        
-        avg_dash_length_pixels = np.mean(dash_lengths)
+        dash_lengths = [line[4] for line in road_level_lines]
+        avg_dash_length_pixels = np.median(dash_lengths)  # Use median for robustness
         
         # Calculate scale (pixels per meter)
-        scale = avg_dash_length_pixels / self.lane_dash_length_meters
+        calculated_scale = avg_dash_length_pixels / self.lane_dash_length_meters
         
-        return scale
+        # Sanity check: scale should be reasonable for typical video
+        if 10 < calculated_scale < 200:  # Reasonable range for pixels/meter
+            return calculated_scale
+        else:
+            return fallback_scale
 
 class HomographyEstimator:
     """Estimate homography for perspective correction"""
@@ -273,43 +312,69 @@ class SpeedEstimator:
     
     def _calculate_speed(self, track: VehicleTrack, current_time: float) -> float:
         """Calculate speed in km/h using displacement and time"""
-        if len(track.positions) < 3:
+        if len(track.positions) < 5:  # Need more positions for stable calculation
             return 0.0
         
         # Get recent positions
         positions = list(track.positions)
         
-        # Calculate displacement over last few frames
-        start_pos = positions[0]
-        end_pos = positions[-1]
+        # Use multiple position pairs for better accuracy
+        total_displacement = 0.0
+        total_time = 0.0
+        valid_measurements = 0
         
-        start_x, start_y, start_time = start_pos
-        end_x, end_y, end_time = end_pos
+        # Calculate displacement over multiple intervals
+        for i in range(len(positions) - 3):
+            start_pos = positions[i]
+            end_pos = positions[i + 3]  # Skip 2 frames for more stable measurement
+            
+            start_x, start_y, start_time = start_pos
+            end_x, end_y, end_time = end_pos
+            
+            # Apply perspective correction if available
+            if self.homography_matrix is not None:
+                start_corrected = self._apply_homography(start_x, start_y)
+                end_corrected = self._apply_homography(end_x, end_y)
+                start_x, start_y = start_corrected
+                end_x, end_y = end_corrected
+            
+            # Calculate displacement in pixels
+            displacement_pixels = math.sqrt((end_x - start_x)**2 + (end_y - start_y)**2)
+            
+            # Motion threshold - ignore tiny movements (tracking jitter)
+            if displacement_pixels < 5.0:  # Less than 5 pixels = likely stationary
+                continue
+                
+            # Convert to meters using scale factor (with fallback)
+            if self.scale_factor > 0.1:  # Valid scale factor
+                displacement_meters = displacement_pixels / self.scale_factor
+            else:
+                # Fallback scale estimation (assume ~30 pixels per meter for typical dashcam)
+                displacement_meters = displacement_pixels / 30.0
+            
+            # Calculate time difference
+            time_diff = end_time - start_time
+            
+            if time_diff > 0:
+                total_displacement += displacement_meters
+                total_time += time_diff
+                valid_measurements += 1
         
-        # Apply perspective correction if available
-        if self.homography_matrix is not None:
-            start_corrected = self._apply_homography(start_x, start_y)
-            end_corrected = self._apply_homography(end_x, end_y)
-            start_x, start_y = start_corrected
-            end_x, end_y = end_corrected
-        
-        # Calculate displacement in pixels
-        displacement_pixels = math.sqrt((end_x - start_x)**2 + (end_y - start_y)**2)
-        
-        # Convert to meters using scale factor
-        displacement_meters = displacement_pixels / self.scale_factor
-        
-        # Calculate time difference
-        time_diff = end_time - start_time
-        
-        if time_diff <= 0:
+        # Need at least 2 valid measurements
+        if valid_measurements < 2 or total_time <= 0:
             return 0.0
         
-        # Calculate speed in m/s
-        speed_ms = displacement_meters / time_diff
+        # Calculate average speed in m/s
+        avg_speed_ms = total_displacement / total_time
         
         # Convert to km/h
-        speed_kmh = speed_ms * 3.6
+        speed_kmh = avg_speed_ms * 3.6
+        
+        # Apply reasonable speed limits (filter out unrealistic speeds)
+        if speed_kmh < 1.0:  # Less than 1 km/h = stationary
+            return 0.0
+        elif speed_kmh > 200.0:  # Over 200 km/h = likely error
+            return 0.0
         
         return speed_kmh
     
