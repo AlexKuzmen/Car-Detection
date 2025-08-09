@@ -39,7 +39,7 @@ DETECTION_CONFIG = {
 
 # Speed estimation configuration
 SPEED_CONFIG = {
-    'min_speed_threshold': 1.0,  # km/h
+    'min_speed_threshold': 0.0,  # km/h
     'max_speed_threshold': 200.0,  # km/h
     'speed_color_thresholds': {
         'low': 80,    # Green

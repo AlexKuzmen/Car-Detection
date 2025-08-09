@@ -13,7 +13,7 @@ from helper import create_video_writer
 def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description='Vehicle Detection and Speed Estimation')
-    parser.add_argument('--input', '-i', type=str, default='1.mp4',
+    parser.add_argument('--input', '-i', type=str, default='KBY -AI Cropped.mp4',
                        help='Input video file path')
     parser.add_argument('--output', '-o', type=str, default=None,
                        help='Output video file path')

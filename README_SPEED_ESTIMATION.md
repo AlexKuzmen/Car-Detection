@@ -56,6 +56,11 @@ Speed Estimation → Visual Overlay → Output Video
    ```bash
    pip install -r requirements.txt
    ```
+   ```linux
+   python3 -m venv env
+   source env/bin/activate
+   pip install -r requirements.txt
+   ```
 
 2. **Download YOLO models** (if not already present):
    ```bash
