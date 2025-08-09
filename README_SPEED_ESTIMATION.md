@@ -99,6 +99,20 @@ python object_detection_speed_tracking.py --input 1.mp4 --conf 0.7
 python object_detection_speed_tracking.py --input 1.mp4 --fps 30.0
 ```
 
+### HTTP API
+
+Run the Flask server:
+
+```bash
+python server.py
+```
+
+Process a video via HTTP:
+
+```bash
+curl -X POST -F "video=@1.mp4" http://localhost:5000/process-video --output output.mp4
+```
+
 ### Command Line Arguments
 
 | Argument | Type | Default | Description |
